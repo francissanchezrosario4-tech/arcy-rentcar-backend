@@ -41,44 +41,48 @@ app.get("/test-db", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+/* ===== CREATE CLIENT ===== */
+app.post("/clientes", async (req, res) => {
+  const { nombre, telefono } = req.body;
 
-/* ===== CREATE TABLES (RUN ONCE) ===== */
-app.get("/setup-db", async (req, res) => {
   try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS clientes (
-        id SERIAL PRIMARY KEY,
-        nombre TEXT NOT NULL,
-        telefono TEXT
-      );
-
-      CREATE TABLE IF NOT EXISTS vehiculos (
-        id SERIAL PRIMARY KEY,
-        marca TEXT,
-        modelo TEXT,
-        placa TEXT,
-        precio_dia NUMERIC
-      );
-
-      CREATE TABLE IF NOT EXISTS facturas (
-        id TEXT PRIMARY KEY,
-        fecha DATE,
-        cliente_nombre TEXT,
-        cliente_telefono TEXT,
-        vehiculo TEXT,
-        placa TEXT,
-        dias INTEGER,
-        precio_dia NUMERIC,
-        total NUMERIC
-      );
-    `);
-
-    res.json({ status: "Tablas creadas correctamente ✅" });
+    const result = await pool.query(
+      "INSERT INTO clientes (nombre, telefono) VALUES ($1, $2) RETURNING *",
+      [nombre, telefono]
+    );
+    res.json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
+/* ===== CREATE FACTURA ===== */
+app.post("/facturas", async (req, res) => {
+  const {
+    id,
+    fecha,
+    cliente_nombre,
+    cliente_telefono,
+    vehiculo,
+    placa,
+    dias,
+    precio_dia,
+    total
+  } = req.body;
+
+  try {
+    await pool.query(
+      `INSERT INTO facturas 
+      (id, fecha, cliente_nombre, cliente_telefono, vehiculo, placa, dias, precio_dia, total)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [id, fecha, cliente_nombre, cliente_telefono, vehiculo, placa, dias, precio_dia, total]
+    );
+
+    res.json({ status: "Factura guardada ✅" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 /* ===== START SERVER ===== */
 app.listen(PORT, () => {
   console.log(`Servidor corriendo en puerto ${PORT}`);
