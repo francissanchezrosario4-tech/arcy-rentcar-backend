@@ -56,33 +56,64 @@ app.post("/clientes", async (req, res) => {
   }
 });
 
-/* ===== CREATE FACTURA ===== */
+/* ===== ENDPOINT: CREAR FACTURA ===== */
 app.post("/facturas", async (req, res) => {
-  const {
-    id,
-    fecha,
-    cliente_nombre,
-    cliente_telefono,
-    vehiculo,
-    placa,
-    dias,
-    precio_dia,
-    total
-  } = req.body;
-
   try {
+    const {
+      id,
+      fecha,
+      cliente_nombre,
+      cliente_telefono,
+      vehiculo,
+      placa,
+      dias,
+      precio_dia,
+      total
+    } = req.body;
+
+    // Validación mínima
+    if (!id || !fecha || !cliente_nombre || !vehiculo || !dias || !precio_dia || !total) {
+      return res.status(400).json({ error: "Datos incompletos" });
+    }
+
     await pool.query(
-      `INSERT INTO facturas 
+      `
+      INSERT INTO facturas
       (id, fecha, cliente_nombre, cliente_telefono, vehiculo, placa, dias, precio_dia, total)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-      [id, fecha, cliente_nombre, cliente_telefono, vehiculo, placa, dias, precio_dia, total]
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      `,
+      [
+        id,
+        fecha,
+        cliente_nombre,
+        cliente_telefono || "",
+        vehiculo,
+        placa || "",
+        dias,
+        precio_dia,
+        total
+      ]
     );
 
-    res.json({ status: "Factura guardada ✅" });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.json({ status: "Factura guardada correctamente ✅" });
+  } catch (error) {
+    console.error("ERROR GUARDANDO FACTURA:", error);
+    res.status(500).json({ error: error.message });
   }
 });
+
+/* ===== ENDPOINT: LISTAR FACTURAS ===== */
+app.get("/facturas", async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT * FROM facturas ORDER BY fecha DESC"
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 /* ===== START SERVER ===== */
 app.listen(PORT, () => {
   console.log(`Servidor corriendo en puerto ${PORT}`);
