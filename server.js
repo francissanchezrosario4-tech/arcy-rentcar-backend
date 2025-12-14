@@ -81,4 +81,5 @@ app.get("/setup-db", async (req, res) => {
 
 /* ===== START SERVER ===== */
 app.listen(PORT, () => {
-  console;
+  console.log(`Servidor corriendo en puerto ${PORT}`);
+});
