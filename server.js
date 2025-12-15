@@ -114,6 +114,26 @@ app.get("/facturas", async (req, res) => {
   }
 });
 
+/* ===== CREATE RENTAS TABLE (RUN ONCE) ===== */
+app.get("/setup-rentas", async (req, res) => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS rentas (
+        id SERIAL PRIMARY KEY,
+        vehiculo_id INTEGER,
+        fecha_inicio DATE,
+        fecha_fin DATE,
+        factura_id TEXT,
+        estado TEXT DEFAULT 'activa'
+      );
+    `);
+
+    res.json({ status: "Tabla rentas creada ✅" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 /* ===== START SERVER ===== */
 app.listen(PORT, () => {
   console.log(`Servidor corriendo en puerto ${PORT}`);
