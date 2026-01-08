@@ -335,6 +335,20 @@ app.get("/facturas", async (req, res) => {
   }
 });
 
+app.delete("/facturas/:id", async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    await pool.query(
+      "DELETE FROM facturas WHERE id = $1",
+      [id]
+    );
+    res.json({ status: "Factura eliminada ✅" });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 /* =======================
    RENTAS + DISPONIBILIDAD
 ======================= */
