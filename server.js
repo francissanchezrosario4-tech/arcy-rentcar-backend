@@ -34,12 +34,8 @@ app.get("/", (req, res) => {
 });
 
 app.get("/test-db", async (req, res) => {
-  try {
-    const r = await pool.query("SELECT NOW()");
-    res.json({ database: "OK", time: r.rows[0] });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  const r = await pool.query("SELECT NOW()");
+  res.json({ database: "OK", time: r.rows[0] });
 });
 
 /* =======================
