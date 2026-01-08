@@ -4,11 +4,32 @@ import pkg from "pg";
 import dotenv from "dotenv";
 
 dotenv.config();
+console.log("🚀 BACKEND VERSION: arcy-rentcar-backend vFINAL 2026-01-07");
 
 const { Pool } = pkg;
-
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
+app.use(express.json());
+
+
+app.get("/test-db", async (req, res) => {
+  try {
+    const r = await pool.query("SELECT NOW()");
+    res.json({ database: "OK", time: r.rows[0] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ... (deja el resto igual)
 
 /* ===== MIDDLEWARE ===== */
 app.use(
@@ -34,8 +55,12 @@ app.get("/", (req, res) => {
 });
 
 app.get("/test-db", async (req, res) => {
-  const r = await pool.query("SELECT NOW()");
-  res.json({ database: "OK", time: r.rows[0] });
+  try {
+    const r = await pool.query("SELECT NOW()");
+    res.json({ database: "OK", time: r.rows[0] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 /* =======================
