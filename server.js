@@ -188,6 +188,19 @@ app.get("/disponibilidad/:vehiculo_id", async (req, res) => {
   res.json({ disponible: r.rows.length === 0 });
 });
 
+app.get("/rentas/vehiculo/:vehiculo_id", async (req, res) => {
+  try {
+    const { vehiculo_id } = req.params;
+    const r = await pool.query(
+      "SELECT * FROM rentas WHERE vehiculo_id = $1 AND estado = 'activa' ORDER BY id DESC",
+      [vehiculo_id]
+    );
+    res.json(r.rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post("/rentas", async (req, res) => {
   const { vehiculo_id, fecha_inicio, fecha_fin, factura_id } = req.body;
 
