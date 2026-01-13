@@ -4,37 +4,16 @@ import pkg from "pg";
 import dotenv from "dotenv";
 
 dotenv.config();
-console.log("🚀 BACKEND VERSION: arcy-rentcar-backend vFINAL 2026-01-07");
 
 const { Pool } = pkg;
+
 const app = express();
 const PORT = process.env.PORT || 3000;
-
-app.use(
-  cors({
-    origin: "*",
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
-app.use(express.json());
-
-
-app.get("/test-db", async (req, res) => {
-  try {
-    const r = await pool.query("SELECT NOW()");
-    res.json({ database: "OK", time: r.rows[0] });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ... (deja el resto igual)
 
 /* ===== MIDDLEWARE ===== */
 app.use(
   cors({
-    origin: "*", // ✅ puedes restringirlo a tu dominio de GitHub Pages luego
+    origin: "*", // luego puedes restringirlo a tu GitHub Pages
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
   })
@@ -65,7 +44,6 @@ app.get("/test-db", async (req, res) => {
 
 /* =======================
    SETUP (OPCIONAL)
-   - Úsalo si quieres crear tablas desde el backend
 ======================= */
 app.get("/setup-all", async (req, res) => {
   try {
@@ -114,6 +92,7 @@ app.get("/setup-all", async (req, res) => {
       CREATE INDEX IF NOT EXISTS idx_rentas_vehiculo_id ON rentas (vehiculo_id);
       CREATE INDEX IF NOT EXISTS idx_rentas_fechas ON rentas (fecha_inicio, fecha_fin);
       CREATE INDEX IF NOT EXISTS idx_facturas_fecha ON facturas (fecha);
+      CREATE INDEX IF NOT EXISTS idx_rentas_factura_id ON rentas (factura_id);
     `);
 
     res.json({ status: "Tablas creadas/aseguradas ✅" });
@@ -183,7 +162,6 @@ app.put("/clientes/:id", async (req, res) => {
     if (r.rows.length === 0) {
       return res.status(404).json({ error: "Cliente no encontrado" });
     }
-
     res.json(r.rows[0]);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -226,7 +204,6 @@ app.post("/vehiculos", async (req, res) => {
 
     res.json(r.rows[0]);
   } catch (e) {
-    // error típico: placa duplicada por UNIQUE
     res.status(500).json({ error: e.message });
   }
 });
@@ -267,7 +244,6 @@ app.put("/vehiculos/:id", async (req, res) => {
     if (r.rows.length === 0) {
       return res.status(404).json({ error: "Vehículo no encontrado" });
     }
-
     res.json(r.rows[0]);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -335,17 +311,26 @@ app.get("/facturas", async (req, res) => {
   }
 });
 
+/**
+ * ✅ BORRADO LIMPIO:
+ * Elimina la renta asociada a la factura para que no queden "rentas fantasma"
+ * en disponibilidad / reportes.
+ */
 app.delete("/facturas/:id", async (req, res) => {
   const { id } = req.params;
 
+  const client = await pool.connect();
   try {
-    await pool.query(
-      "DELETE FROM facturas WHERE id = $1",
-      [id]
-    );
-    res.json({ status: "Factura eliminada ✅" });
+    await client.query("BEGIN");
+    await client.query("DELETE FROM rentas WHERE factura_id = $1", [id]);
+    await client.query("DELETE FROM facturas WHERE id = $1", [id]);
+    await client.query("COMMIT");
+    res.json({ status: "Factura y renta eliminadas ✅" });
   } catch (e) {
+    await client.query("ROLLBACK");
     res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
   }
 });
 
