@@ -13,9 +13,9 @@ const PORT = process.env.PORT || 3000;
 /* ===== MIDDLEWARE ===== */
 app.use(
   cors({
-    origin: "*",
+    origin: "*", // luego puedes restringirlo a tu GitHub Pages
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Admin-Key"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 app.use(express.json());
@@ -26,16 +26,144 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false },
 });
 
-/* ===== ADMIN GUARD (recomendado) =====
-   Si pones ADMIN_KEY en Render, los DELETE quedan protegidos.
-*/
-function requireAdmin(req, res, next) {
-  if (!process.env.ADMIN_KEY) return next();
-  const key = req.headers["x-admin-key"];
-  if (key !== process.env.ADMIN_KEY) {
-    return res.status(403).json({ error: "Forbidden" });
+/* =======================
+   HELPERS: ESTADOS AUTO
+======================= */
+
+/**
+ * Normaliza estados de rentas por fecha:
+ * - pendiente -> activa cuando ya llegó la fecha_inicio
+ * - activa -> finalizada cuando ya pasó fecha_fin
+ */
+async function normalizeRentasEstados(clientOrPool) {
+  const db = clientOrPool;
+  await db.query(`
+    UPDATE rentas
+    SET estado = 'activa'
+    WHERE estado = 'pendiente'
+      AND fecha_inicio <= CURRENT_DATE;
+  `);
+
+  await db.query(`
+    UPDATE rentas
+    SET estado = 'finalizada'
+    WHERE estado = 'activa'
+      AND fecha_fin < CURRENT_DATE;
+  `);
+}
+
+/**
+ * Recalcula el estado del vehículo (sin tocar "Mantenimiento"):
+ * - Rentado: si hay renta ACTIVA hoy
+ * - Reservado: si hay renta PENDIENTE futura
+ * - Disponible: si no hay rentas activas/pendientes
+ */
+async function recalcVehiculoEstado(clientOrPool, vehiculo_id) {
+  const db = clientOrPool;
+
+  // Si está en mantenimiento, no lo cambiamos.
+  const v = await db.query("SELECT estado FROM vehiculos WHERE id = $1", [
+    vehiculo_id,
+  ]);
+  if (v.rows[0]?.estado === "Mantenimiento") return;
+
+  const hasActiva = await db.query(
+    `
+    SELECT 1
+    FROM rentas r
+    WHERE r.vehiculo_id = $1
+      AND r.estado = 'activa'
+      AND CURRENT_DATE BETWEEN r.fecha_inicio AND r.fecha_fin
+    LIMIT 1
+    `,
+    [vehiculo_id]
+  );
+
+  if (hasActiva.rows.length > 0) {
+    await db.query("UPDATE vehiculos SET estado = 'Rentado' WHERE id = $1", [
+      vehiculo_id,
+    ]);
+    return;
   }
-  next();
+
+  const hasPendiente = await db.query(
+    `
+    SELECT 1
+    FROM rentas r
+    WHERE r.vehiculo_id = $1
+      AND r.estado = 'pendiente'
+      AND r.fecha_inicio > CURRENT_DATE
+    LIMIT 1
+    `,
+    [vehiculo_id]
+  );
+
+  if (hasPendiente.rows.length > 0) {
+    await db.query("UPDATE vehiculos SET estado = 'Reservado' WHERE id = $1", [
+      vehiculo_id,
+    ]);
+    return;
+  }
+
+  await db.query("UPDATE vehiculos SET estado = 'Disponible' WHERE id = $1", [
+    vehiculo_id,
+  ]);
+}
+
+/**
+ * Recalcula estados de TODOS los vehículos (sin tocar "Mantenimiento")
+ */
+async function recalcTodosVehiculos(clientOrPool) {
+  const db = clientOrPool;
+  // Normaliza primero
+  await normalizeRentasEstados(db);
+
+  // Rentado
+  await db.query(`
+    UPDATE vehiculos v
+    SET estado = 'Rentado'
+    WHERE v.estado <> 'Mantenimiento'
+      AND EXISTS (
+        SELECT 1 FROM rentas r
+        WHERE r.vehiculo_id = v.id
+          AND r.estado = 'activa'
+          AND CURRENT_DATE BETWEEN r.fecha_inicio AND r.fecha_fin
+      );
+  `);
+
+  // Reservado (solo si NO está rentado)
+  await db.query(`
+    UPDATE vehiculos v
+    SET estado = 'Reservado'
+    WHERE v.estado <> 'Mantenimiento'
+      AND NOT EXISTS (
+        SELECT 1 FROM rentas r
+        WHERE r.vehiculo_id = v.id
+          AND r.estado = 'activa'
+          AND CURRENT_DATE BETWEEN r.fecha_inicio AND r.fecha_fin
+      )
+      AND EXISTS (
+        SELECT 1 FROM rentas r
+        WHERE r.vehiculo_id = v.id
+          AND r.estado = 'pendiente'
+          AND r.fecha_inicio > CURRENT_DATE
+      );
+  `);
+
+  // Disponible (si no hay activa ni pendiente)
+  await db.query(`
+    UPDATE vehiculos v
+    SET estado = 'Disponible'
+    WHERE v.estado <> 'Mantenimiento'
+      AND NOT EXISTS (
+        SELECT 1 FROM rentas r
+        WHERE r.vehiculo_id = v.id
+          AND (
+            (r.estado = 'activa' AND CURRENT_DATE BETWEEN r.fecha_inicio AND r.fecha_fin)
+            OR (r.estado = 'pendiente' AND r.fecha_inicio > CURRENT_DATE)
+          )
+      );
+  `);
 }
 
 /* =======================
@@ -55,17 +183,73 @@ app.get("/test-db", async (req, res) => {
 });
 
 /* =======================
-   CLIENTES
+   SETUP (OPCIONAL)
+   - crea tablas si no existen
+   - (si ya existen, no borra nada)
 ======================= */
-app.get("/clientes", async (req, res) => {
+app.get("/setup-all", async (req, res) => {
   try {
-    const r = await pool.query("SELECT * FROM clientes ORDER BY id DESC");
-    res.json(r.rows);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS clientes (
+        id SERIAL PRIMARY KEY,
+        nombre TEXT NOT NULL,
+        telefono TEXT,
+        cedula TEXT,
+        nota TEXT,
+        valoracion INTEGER DEFAULT 5
+      );
+
+      CREATE TABLE IF NOT EXISTS vehiculos (
+        id SERIAL PRIMARY KEY,
+        marca TEXT,
+        modelo TEXT,
+        ano INTEGER,
+        placa TEXT UNIQUE,
+        estado TEXT DEFAULT 'Disponible',
+        precio_dia NUMERIC,
+        imagen TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS facturas (
+        id TEXT PRIMARY KEY,
+        fecha DATE,
+        cliente_nombre TEXT,
+        cliente_telefono TEXT,
+        vehiculo TEXT,
+        placa TEXT,
+        dias INTEGER,
+        precio_dia NUMERIC,
+        total NUMERIC
+      );
+
+      CREATE TABLE IF NOT EXISTS rentas (
+        id SERIAL PRIMARY KEY,
+        vehiculo_id INTEGER REFERENCES vehiculos(id) ON DELETE RESTRICT,
+        fecha_inicio DATE,
+        fecha_fin DATE,
+        factura_id TEXT REFERENCES facturas(id) ON DELETE CASCADE,
+        estado TEXT DEFAULT 'pendiente'
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_rentas_vehiculo_id ON rentas (vehiculo_id);
+      CREATE INDEX IF NOT EXISTS idx_rentas_fechas ON rentas (fecha_inicio, fecha_fin);
+      CREATE INDEX IF NOT EXISTS idx_facturas_fecha ON facturas (fecha);
+      CREATE INDEX IF NOT EXISTS idx_rentas_factura_id ON rentas (factura_id);
+      CREATE INDEX IF NOT EXISTS idx_rentas_estado ON rentas (estado);
+    `);
+
+    // Ajusta estados automáticamente al arrancar (por si hay rentas viejas)
+    await recalcTodosVehiculos(pool);
+
+    res.json({ status: "Tablas creadas/aseguradas ✅" });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
+/* =======================
+   CLIENTES
+======================= */
 app.post("/clientes", async (req, res) => {
   const { nombre, telefono, cedula, nota, valoracion } = req.body;
 
@@ -76,9 +260,24 @@ app.post("/clientes", async (req, res) => {
       VALUES ($1,$2,$3,$4,$5)
       RETURNING *
       `,
-      [nombre, telefono || "", cedula || "", nota || "", Number(valoracion ?? 5)]
+      [
+        nombre,
+        telefono || "",
+        cedula || "",
+        nota || "",
+        Number(valoracion ?? 5),
+      ]
     );
     res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/clientes", async (req, res) => {
+  try {
+    const r = await pool.query("SELECT * FROM clientes ORDER BY id DESC");
+    res.json(r.rows);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -96,25 +295,31 @@ app.put("/clientes/:id", async (req, res) => {
       WHERE id=$6
       RETURNING *
       `,
-      [nombre, telefono || "", cedula || "", nota || "", Number(valoracion ?? 5), id]
+      [
+        nombre,
+        telefono || "",
+        cedula || "",
+        nota || "",
+        Number(valoracion ?? 5),
+        id,
+      ]
     );
-    if (r.rows.length === 0) return res.status(404).json({ error: "Cliente no encontrado" });
+
+    if (r.rows.length === 0) {
+      return res.status(404).json({ error: "Cliente no encontrado" });
+    }
     res.json(r.rows[0]);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-/* 🔒 No se borra si tiene facturas (FK RESTRICT) */
-app.delete("/clientes/:id", requireAdmin, async (req, res) => {
+app.delete("/clientes/:id", async (req, res) => {
   const { id } = req.params;
   try {
     await pool.query("DELETE FROM clientes WHERE id=$1", [id]);
     res.json({ status: "Cliente eliminado ✅" });
   } catch (e) {
-    if (e.code === "23503") {
-      return res.status(409).json({ error: "No se puede eliminar: el cliente tiene facturas asociadas." });
-    }
     res.status(500).json({ error: e.message });
   }
 });
@@ -122,8 +327,41 @@ app.delete("/clientes/:id", requireAdmin, async (req, res) => {
 /* =======================
    VEHICULOS
 ======================= */
+app.post("/vehiculos", async (req, res) => {
+  const { marca, modelo, placa, precio_dia, ano, estado, imagen } = req.body;
+
+  try {
+    const r = await pool.query(
+      `
+      INSERT INTO vehiculos (marca, modelo, placa, precio_dia, ano, estado, imagen)
+      VALUES ($1,$2,$3,$4,$5,$6,$7)
+      RETURNING *
+      `,
+      [
+        marca || "",
+        modelo || "",
+        placa || null,
+        precio_dia ?? 0,
+        ano ?? null,
+        estado ?? "Disponible",
+        imagen ?? "",
+      ]
+    );
+
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * ✅ IMPORTANTE:
+ * Antes de devolver vehículos, normalizamos estados de rentas y recalculamos
+ * estados de vehículos (Rentado/Reservado/Disponible).
+ */
 app.get("/vehiculos", async (req, res) => {
   try {
+    await recalcTodosVehiculos(pool);
     const r = await pool.query("SELECT * FROM vehiculos ORDER BY id DESC");
     res.json(r.rows);
   } catch (e) {
@@ -131,113 +369,152 @@ app.get("/vehiculos", async (req, res) => {
   }
 });
 
-app.post("/vehiculos", async (req, res) => {
-  const { marca, modelo, ano, placa, estado, precio_dia, imagen } = req.body;
-
-  try {
-    const r = await pool.query(
-      `
-      INSERT INTO vehiculos (marca, modelo, ano, placa, estado, precio_dia, imagen)
-      VALUES ($1,$2,$3,$4,$5,$6,$7)
-      RETURNING *
-      `,
-      [
-        marca,
-        modelo,
-        ano ?? null,
-        placa,
-        estado ?? "Disponible",
-        Number(precio_dia ?? 0),
-        imagen || "",
-      ]
-    );
-    res.json(r.rows[0]);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
 app.put("/vehiculos/:id", async (req, res) => {
   const { id } = req.params;
-  const { marca, modelo, ano, placa, estado, precio_dia, imagen } = req.body;
+  const { marca, modelo, placa, precio_dia, ano, estado, imagen } = req.body;
 
   try {
     const r = await pool.query(
       `
       UPDATE vehiculos
-      SET marca=$1, modelo=$2, ano=$3, placa=$4, estado=$5, precio_dia=$6, imagen=$7
+      SET marca=$1, modelo=$2, placa=$3, precio_dia=$4, ano=$5, estado=$6, imagen=$7
       WHERE id=$8
       RETURNING *
       `,
       [
-        marca,
-        modelo,
+        marca || "",
+        modelo || "",
+        placa || null,
+        precio_dia ?? 0,
         ano ?? null,
-        placa,
         estado ?? "Disponible",
-        Number(precio_dia ?? 0),
-        imagen || "",
+        imagen ?? "",
         id,
       ]
     );
-    if (r.rows.length === 0) return res.status(404).json({ error: "Vehículo no encontrado" });
+
+    if (r.rows.length === 0) {
+      return res.status(404).json({ error: "Vehículo no encontrado" });
+    }
     res.json(r.rows[0]);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-/* 🔒 No se borra si tiene facturas/rentas (FK RESTRICT) */
-app.delete("/vehiculos/:id", requireAdmin, async (req, res) => {
+app.delete("/vehiculos/:id", async (req, res) => {
   const { id } = req.params;
   try {
     await pool.query("DELETE FROM vehiculos WHERE id=$1", [id]);
     res.json({ status: "Vehículo eliminado ✅" });
   } catch (e) {
-    if (e.code === "23503") {
-      return res.status(409).json({ error: "No se puede eliminar: el vehículo tiene facturas/rentas asociadas." });
-    }
     res.status(500).json({ error: e.message });
   }
 });
 
 /* =======================
-   FACTURAS + RENTAS
-   ✅ Atómico y blindado (transacción)
+   FACTURAS
 ======================= */
+app.post("/facturas", async (req, res) => {
+  const {
+    id,
+    fecha,
+    cliente_nombre,
+    cliente_telefono,
+    vehiculo,
+    placa,
+    dias,
+    precio_dia,
+    total,
+  } = req.body;
+
+  try {
+    await pool.query(
+      `
+      INSERT INTO facturas
+      (id, fecha, cliente_nombre, cliente_telefono, vehiculo, placa, dias, precio_dia, total)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      `,
+      [
+        id,
+        fecha,
+        cliente_nombre,
+        cliente_telefono || "",
+        vehiculo,
+        placa || "",
+        dias,
+        precio_dia,
+        total,
+      ]
+    );
+
+    res.json({ status: "Factura guardada ✅" });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 app.get("/facturas", async (req, res) => {
   try {
-    const r = await pool.query("SELECT * FROM facturas ORDER BY fecha DESC, created_at DESC");
+    const r = await pool.query("SELECT * FROM facturas ORDER BY fecha DESC");
     res.json(r.rows);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-app.get("/rentas", async (req, res) => {
+/**
+ * ✅ BORRADO LIMPIO:
+ * - elimina renta(s) asociadas a la factura
+ * - elimina la factura
+ * - recalcula estados de los vehículos afectados
+ */
+app.delete("/facturas/:id", async (req, res) => {
+  const { id } = req.params;
+
+  const client = await pool.connect();
   try {
-    const r = await pool.query("SELECT * FROM rentas ORDER BY id DESC");
-    res.json(r.rows);
+    await client.query("BEGIN");
+
+    const vr = await client.query(
+      "SELECT DISTINCT vehiculo_id FROM rentas WHERE factura_id = $1",
+      [id]
+    );
+
+    await client.query("DELETE FROM rentas WHERE factura_id = $1", [id]);
+    await client.query("DELETE FROM facturas WHERE id = $1", [id]);
+
+    // recalcula cada vehículo afectado
+    for (const row of vr.rows) {
+      if (row.vehiculo_id) await recalcVehiculoEstado(client, row.vehiculo_id);
+    }
+
+    await client.query("COMMIT");
+    res.json({ status: "Factura y renta(s) eliminadas ✅" });
   } catch (e) {
+    await client.query("ROLLBACK");
     res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
   }
 });
 
+/* =======================
+   RENTAS + DISPONIBILIDAD
+======================= */
 app.get("/disponibilidad/:vehiculo_id", async (req, res) => {
   const { vehiculo_id } = req.params;
   const { inicio, fin } = req.query;
 
   try {
+    // Considera activa y pendiente (para bloquear reservas)
     const r = await pool.query(
       `
-      SELECT 1
-      FROM rentas
+      SELECT * FROM rentas
       WHERE vehiculo_id = $1
-        AND estado = 'activa'
+        AND estado IN ('activa','pendiente')
         AND fecha_inicio <= $3
         AND fecha_fin >= $2
-      LIMIT 1
       `,
       [vehiculo_id, inicio, fin]
     );
@@ -248,111 +525,84 @@ app.get("/disponibilidad/:vehiculo_id", async (req, res) => {
   }
 });
 
+app.get("/rentas", async (req, res) => {
+  try {
+    await normalizeRentasEstados(pool);
+    const r = await pool.query("SELECT * FROM rentas ORDER BY id DESC");
+    res.json(r.rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/rentas/vehiculo/:vehiculo_id", async (req, res) => {
+  try {
+    const { vehiculo_id } = req.params;
+    await normalizeRentasEstados(pool);
+    const r = await pool.query(
+      "SELECT * FROM rentas WHERE vehiculo_id = $1 AND estado IN ('activa','pendiente') ORDER BY id DESC",
+      [vehiculo_id]
+    );
+    res.json(r.rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 /**
- * POST /facturas
- * Espera: cliente_id, vehiculo_id, fecha, fecha_inicio, fecha_fin, dias, precio_dia, total
- * Genera id si no viene.
+ * ✅ CREA RENTA:
+ * - si fecha_inicio > hoy -> estado 'pendiente' (reservada)
+ * - si fecha_inicio <= hoy -> estado 'activa' (rentada)
+ * - luego actualiza estado del vehículo automáticamente
  */
-app.post("/facturas", async (req, res) => {
-  const {
-    id,
-    fecha,
-    cliente_id,
-    vehiculo_id,
-    fecha_inicio,
-    fecha_fin,
-    dias,
-    precio_dia,
-    total,
-  } = req.body;
+app.post("/rentas", async (req, res) => {
+  const { vehiculo_id, fecha_inicio, fecha_fin, factura_id } = req.body;
 
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
-    // Traer snapshot de cliente y vehículo
-    const c = await client.query("SELECT * FROM clientes WHERE id=$1", [cliente_id]);
-    if (c.rows.length === 0) throw new Error("Cliente no encontrado");
-
-    const v = await client.query("SELECT * FROM vehiculos WHERE id=$1", [vehiculo_id]);
-    if (v.rows.length === 0) throw new Error("Vehículo no encontrado");
-
-    // Verificar disponibilidad
+    // Bloquea si hay choque de fechas con activa o pendiente
     const check = await client.query(
       `
-      SELECT 1
-      FROM rentas
+      SELECT 1 FROM rentas
       WHERE vehiculo_id = $1
-        AND estado = 'activa'
+        AND estado IN ('activa','pendiente')
         AND fecha_inicio <= $3
         AND fecha_fin >= $2
       LIMIT 1
       `,
       [vehiculo_id, fecha_inicio, fecha_fin]
     );
+
     if (check.rows.length > 0) {
       await client.query("ROLLBACK");
-      return res.status(400).json({ error: "Vehículo no disponible en ese rango" });
+      return res.status(400).json({ error: "Vehículo no disponible" });
     }
 
-    const cliente = c.rows[0];
-    const vehiculo = v.rows[0];
+    // Define estado según fecha
+    const estado =
+      new Date(fecha_inicio) > new Date(new Date().toISOString().slice(0, 10))
+        ? "pendiente"
+        : "activa";
 
-    const facturaId = id || `FAC-${Date.now()}`;
-
-    // Insert factura (con ids + snapshot)
     await client.query(
       `
-      INSERT INTO facturas
-      (id, fecha, cliente_id, cliente_nombre, cliente_telefono, vehiculo_id, vehiculo, placa, dias, precio_dia, total)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+      INSERT INTO rentas (vehiculo_id, fecha_inicio, fecha_fin, factura_id, estado)
+      VALUES ($1,$2,$3,$4,$5)
       `,
-      [
-        facturaId,
-        fecha,
-        cliente_id,
-        cliente.nombre,
-        cliente.telefono || "",
-        vehiculo_id,
-        `${vehiculo.marca} ${vehiculo.modelo}`.trim(),
-        vehiculo.placa || "",
-        Number(dias ?? 1),
-        Number(precio_dia ?? vehiculo.precio_dia ?? 0),
-        Number(total ?? 0),
-      ]
+      [vehiculo_id, fecha_inicio, fecha_fin, factura_id, estado]
     );
 
-    // Insert renta ligada a factura (CASCADE)
-    await client.query(
-      `
-      INSERT INTO rentas (factura_id, vehiculo_id, fecha_inicio, fecha_fin, estado)
-      VALUES ($1,$2,$3,$4,'activa')
-      `,
-      [facturaId, vehiculo_id, fecha_inicio, fecha_fin]
-    );
+    await recalcVehiculoEstado(client, vehiculo_id);
 
     await client.query("COMMIT");
-    res.json({ status: "Factura y renta guardadas ✅", id: facturaId });
+    res.json({ status: "Renta creada ✅", estado });
   } catch (e) {
     await client.query("ROLLBACK");
     res.status(500).json({ error: e.message });
   } finally {
     client.release();
-  }
-});
-
-/**
- * DELETE /facturas/:id
- * ✅ Solo borra factura (renta se borra sola por CASCADE)
- * 🔒 Protegido si configuras ADMIN_KEY
- */
-app.delete("/facturas/:id", requireAdmin, async (req, res) => {
-  const { id } = req.params;
-  try {
-    await pool.query("DELETE FROM facturas WHERE id=$1", [id]);
-    res.json({ status: "Factura eliminada ✅ (renta por cascade)" });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
   }
 });
 
@@ -362,3 +612,4 @@ app.delete("/facturas/:id", requireAdmin, async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Servidor corriendo en puerto ${PORT}`);
 });
+
