@@ -123,7 +123,61 @@ app.delete("/clientes/:id", requireAdmin, async (req, res) => {
 ======================= */
 app.get("/vehiculos", async (req, res) => {
   try {
-    const r = await pool.query("SELECT * FROM vehiculos ORDER BY id DESC");
+    const r = await pool.query(`
+      WITH renta_activa AS (
+        SELECT
+          r.vehiculo_id,
+          r.factura_id,
+          r.fecha_inicio,
+          r.fecha_fin,
+          f.cliente_nombre,
+          ROW_NUMBER() OVER (PARTITION BY r.vehiculo_id ORDER BY r.fecha_inicio ASC) AS rn
+        FROM rentas r
+        LEFT JOIN facturas f ON f.id = r.factura_id
+        WHERE r.estado = 'activa'
+          AND CURRENT_DATE BETWEEN r.fecha_inicio AND r.fecha_fin
+      ),
+      renta_pendiente AS (
+        SELECT
+          r.vehiculo_id,
+          r.factura_id,
+          r.fecha_inicio,
+          r.fecha_fin,
+          f.cliente_nombre,
+          ROW_NUMBER() OVER (PARTITION BY r.vehiculo_id ORDER BY r.fecha_inicio ASC) AS rn
+        FROM rentas r
+        LEFT JOIN facturas f ON f.id = r.factura_id
+        WHERE r.estado = 'activa'
+          AND r.fecha_inicio > CURRENT_DATE
+      )
+      SELECT
+        v.*,
+
+        CASE
+          WHEN LOWER(v.estado) = 'mantenimiento' THEN 'Mantenimiento'
+          WHEN a.vehiculo_id IS NOT NULL THEN 'Rentado'
+          WHEN p.vehiculo_id IS NOT NULL THEN 'Pendiente'
+          ELSE 'Disponible'
+        END AS estado_calculado,
+
+        -- info de renta que se mostrará en dashboard (activa tiene prioridad)
+        COALESCE(a.fecha_inicio, p.fecha_inicio) AS renta_inicio,
+        COALESCE(a.fecha_fin, p.fecha_fin) AS renta_fin,
+        COALESCE(a.cliente_nombre, p.cliente_nombre) AS renta_cliente,
+        COALESCE(a.factura_id, p.factura_id) AS renta_factura_id,
+
+        CASE
+          WHEN a.vehiculo_id IS NOT NULL THEN 'activa'
+          WHEN p.vehiculo_id IS NOT NULL THEN 'pendiente'
+          ELSE NULL
+        END AS renta_tipo
+
+      FROM vehiculos v
+      LEFT JOIN renta_activa a ON a.vehiculo_id = v.id AND a.rn = 1
+      LEFT JOIN renta_pendiente p ON p.vehiculo_id = v.id AND p.rn = 1
+      ORDER BY v.id DESC;
+    `);
+
     res.json(r.rows);
   } catch (e) {
     res.status(500).json({ error: e.message });
