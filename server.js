@@ -259,7 +259,18 @@ app.delete("/vehiculos/:id", requireAdmin, async (req, res) => {
 ======================= */
 app.get("/facturas", async (req, res) => {
   try {
-    const r = await pool.query("SELECT * FROM facturas ORDER BY fecha DESC, created_at DESC");
+    const r = await pool.query(`
+      SELECT
+        f.*,
+        r.fecha_inicio,
+        r.fecha_fin,
+        r.estado AS renta_estado,
+        r.extras AS renta_extras
+      FROM facturas f
+      LEFT JOIN rentas r
+        ON r.factura_id = f.id
+      ORDER BY f.fecha DESC, f.created_at DESC
+    `);
     res.json(r.rows);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -314,6 +325,7 @@ app.post("/facturas", async (req, res) => {
     fecha_fin,
     dias,
     precio_dia,
+    extras,
     total,
   } = req.body;
 
@@ -355,8 +367,8 @@ app.post("/facturas", async (req, res) => {
     await client.query(
       `
       INSERT INTO facturas
-      (id, fecha, cliente_id, cliente_nombre, cliente_telefono, vehiculo_id, vehiculo, placa, dias, precio_dia, total)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+      (id, fecha, cliente_id, cliente_nombre, cliente_telefono, vehiculo_id, vehiculo, placa, dias, precio_dia, extras, total)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
       `,
       [
         facturaId,
@@ -369,6 +381,7 @@ app.post("/facturas", async (req, res) => {
         vehiculo.placa || "",
         Number(dias ?? 1),
         Number(precio_dia ?? vehiculo.precio_dia ?? 0),
+        Number(extras ?? 0),
         Number(total ?? 0),
       ]
     );
@@ -376,10 +389,10 @@ app.post("/facturas", async (req, res) => {
     // 4) Insert renta ligada a factura (FK)
     await client.query(
       `
-      INSERT INTO rentas (factura_id, vehiculo_id, fecha_inicio, fecha_fin, estado)
-      VALUES ($1,$2,$3,$4,'activa')
+      INSERT INTO rentas (factura_id, vehiculo_id, fecha_inicio, fecha_fin, extras, estado)
+      VALUES ($1,$2,$3,$4,$5,'activa')
       `,
-      [facturaId, vehiculo_id, fecha_inicio, fecha_fin]
+      [facturaId, vehiculo_id, fecha_inicio, fecha_fin, Number(extras ?? 0)]
     );
 
     await client.query("COMMIT");
@@ -413,3 +426,4 @@ app.delete("/facturas/:id", requireAdmin, async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Servidor corriendo en puerto ${PORT}`);
 });
+
