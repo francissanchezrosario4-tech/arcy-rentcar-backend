@@ -185,13 +185,13 @@ app.get("/vehiculos", async (req, res) => {
 });
 
 app.post("/vehiculos", async (req, res) => {
-  const { marca, modelo, ano, placa, estado, precio_dia, imagen } = req.body;
+  const { marca, modelo, ano, placa, estado, precio_dia, imagen, seguro_vencimiento } = req.body;
 
   try {
     const r = await pool.query(
       `
-      INSERT INTO vehiculos (marca, modelo, ano, placa, estado, precio_dia, imagen)
-      VALUES ($1,$2,$3,$4,$5,$6,$7)
+      INSERT INTO vehiculos (marca, modelo, ano, placa, estado, precio_dia, imagen, seguro_vencimiento)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
       RETURNING *
       `,
       [
@@ -202,6 +202,7 @@ app.post("/vehiculos", async (req, res) => {
         estado ?? "Disponible",
         Number(precio_dia ?? 0),
         imagen || "",
+        seguro_vencimiento || null,
       ]
     );
     res.json(r.rows[0]);
@@ -212,14 +213,14 @@ app.post("/vehiculos", async (req, res) => {
 
 app.put("/vehiculos/:id", async (req, res) => {
   const { id } = req.params;
-  const { marca, modelo, ano, placa, estado, precio_dia, imagen } = req.body;
+  const { marca, modelo, ano, placa, estado, precio_dia, imagen, seguro_vencimiento } = req.body;
 
   try {
     const r = await pool.query(
       `
       UPDATE vehiculos
-      SET marca=$1, modelo=$2, ano=$3, placa=$4, estado=$5, precio_dia=$6, imagen=$7
-      WHERE id=$8
+      SET marca=$1, modelo=$2, ano=$3, placa=$4, estado=$5, precio_dia=$6, imagen=$7, seguro_vencimiento=$8
+      WHERE id=$9
       RETURNING *
       `,
       [
@@ -230,6 +231,7 @@ app.put("/vehiculos/:id", async (req, res) => {
         estado ?? "Disponible",
         Number(precio_dia ?? 0),
         imagen || "",
+        seguro_vencimiento || null,
         id,
       ]
     );
@@ -415,6 +417,26 @@ app.delete("/facturas/:id", requireAdmin, async (req, res) => {
   try {
     await pool.query("DELETE FROM facturas WHERE id=$1", [id]);
     res.json({ status: "Factura eliminada ✅" });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+/* =======================
+   SEGUROS ALERTAS
+======================= */
+app.get("/seguros-alertas", async (req, res) => {
+  try {
+    const r = await pool.query(`
+      SELECT id, marca, modelo, placa, seguro_vencimiento
+      FROM vehiculos
+      WHERE seguro_vencimiento IS NOT NULL
+        AND seguro_vencimiento <= CURRENT_DATE + INTERVAL '30 days'
+      ORDER BY seguro_vencimiento ASC
+    `);
+
+    res.json(r.rows);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
