@@ -442,10 +442,203 @@ app.get("/seguros-alertas", async (req, res) => {
   }
 });
 
+
+
 /* =======================
-   START SERVER
+   SEGURO - POLIZAS & PAGOS (Recordatorios RD)
+   - Opción B: múltiples pólizas por vehículo
+   - Opción 1: pagos parciales con fecha límite (próximo pago)
 ======================= */
-app.listen(PORT, () => {
-  console.log(`Servidor corriendo en puerto ${PORT}`);
+
+// Crear póliza (un seguro completo: total + inicio/fin)
+app.post("/seguro/polizas", async (req, res) => {
+  const { vehiculo_id, total_poliza, fecha_inicio, fecha_fin } = req.body;
+
+  if (!vehiculo_id || !total_poliza || !fecha_inicio || !fecha_fin) {
+    return res.status(400).json({ error: "vehiculo_id, total_poliza, fecha_inicio y fecha_fin son requeridos" });
+  }
+
+  try {
+    const r = await pool.query(
+      `
+      INSERT INTO seguro_polizas (vehiculo_id, total_poliza, fecha_inicio, fecha_fin)
+      VALUES ($1,$2,$3,$4)
+      RETURNING *
+      `,
+      [vehiculo_id, total_poliza, fecha_inicio, fecha_fin]
+    );
+
+    res.json(r.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error creando póliza" });
+  }
 });
 
+// Registrar un pago parcial (monto pagado + fecha pago + fecha límite del próximo pago)
+app.post("/seguro/pagos", async (req, res) => {
+  const { poliza_id, monto, fecha_pago, fecha_limite } = req.body;
+
+  if (!poliza_id || monto === undefined || monto === null || !fecha_pago || !fecha_limite) {
+    return res.status(400).json({ error: "poliza_id, monto, fecha_pago y fecha_limite son requeridos" });
+  }
+
+  try {
+    const r = await pool.query(
+      `
+      INSERT INTO seguro_pagos (poliza_id, monto, fecha_pago, fecha_limite)
+      VALUES ($1,$2,$3,$4)
+      RETURNING *
+      `,
+      [poliza_id, monto, fecha_pago, fecha_limite]
+    );
+
+    res.json(r.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error registrando pago" });
+  }
+});
+
+// Listar pagos de una póliza (historial)
+app.get("/seguro/pagos/:poliza_id", async (req, res) => {
+  const { poliza_id } = req.params;
+
+  try {
+    const r = await pool.query(
+      `
+      SELECT *
+      FROM seguro_pagos
+      WHERE poliza_id = $1
+      ORDER BY fecha_pago ASC, id ASC
+      `,
+      [poliza_id]
+    );
+
+    res.json(r.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error obteniendo pagos" });
+  }
+});
+
+// Listar pólizas de un vehículo con cálculo automático (total pagado / pendiente / próximo límite)
+app.get("/seguro/polizas/:vehiculo_id", async (req, res) => {
+  const { vehiculo_id } = req.params;
+
+  try {
+    const r = await pool.query(
+      `
+      SELECT 
+        p.*,
+        COALESCE(SUM(pg.monto),0) AS total_pagado,
+        MAX(pg.fecha_limite) AS proximo_limite
+      FROM seguro_polizas p
+      LEFT JOIN seguro_pagos pg ON pg.poliza_id = p.id
+      WHERE p.vehiculo_id = $1
+      GROUP BY p.id
+      ORDER BY p.fecha_inicio DESC
+      `,
+      [vehiculo_id]
+    );
+
+    const hoy = new Date();
+    const dayMs = 1000 * 60 * 60 * 24;
+
+    const resultado = r.rows.map((p) => {
+      const totalPoliza = Number(p.total_poliza || 0);
+      const totalPagado = Number(p.total_pagado || 0);
+      const pendiente = totalPoliza - totalPagado;
+
+      let estado_pago = "Al día";
+      let dias_para_limite = null;
+
+      const proximoLimite = p.proximo_limite ? new Date(p.proximo_limite) : null;
+
+      if (pendiente <= 0) {
+        estado_pago = "Pagado";
+      } else if (proximoLimite) {
+        dias_para_limite = Math.ceil((proximoLimite.getTime() - hoy.getTime()) / dayMs);
+        if (dias_para_limite < 0) estado_pago = "Vencido";
+        else if (dias_para_limite <= 5) estado_pago = "Por vencer";
+        else estado_pago = "Al día";
+      } else {
+        // Si todavía no has registrado ningún pago, igual dejamos pendiente visible
+        estado_pago = "Pendiente";
+      }
+
+      return {
+        ...p,
+        total_pagado: totalPagado,
+        pendiente,
+        estado_pago,
+        dias_para_limite,
+      };
+    });
+
+    res.json(resultado);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error obteniendo pólizas" });
+  }
+});
+
+// Resumen (póliza más reciente) para mostrar recordatorio rápido en dashboard
+app.get("/seguro/resumen/:vehiculo_id", async (req, res) => {
+  const { vehiculo_id } = req.params;
+
+  try {
+    const r = await pool.query(
+      `
+      SELECT 
+        p.*,
+        COALESCE(SUM(pg.monto),0) AS total_pagado,
+        MAX(pg.fecha_limite) AS proximo_limite
+      FROM seguro_polizas p
+      LEFT JOIN seguro_pagos pg ON pg.poliza_id = p.id
+      WHERE p.vehiculo_id = $1
+      GROUP BY p.id
+      ORDER BY p.fecha_inicio DESC
+      LIMIT 1
+      `,
+      [vehiculo_id]
+    );
+
+    if (r.rows.length === 0) return res.json(null);
+
+    const p = r.rows[0];
+    const hoy = new Date();
+    const dayMs = 1000 * 60 * 60 * 24;
+
+    const totalPoliza = Number(p.total_poliza || 0);
+    const totalPagado = Number(p.total_pagado || 0);
+    const pendiente = totalPoliza - totalPagado;
+
+    let estado_pago = "Al día";
+    let dias_para_limite = null;
+
+    const proximoLimite = p.proximo_limite ? new Date(p.proximo_limite) : null;
+
+    if (pendiente <= 0) {
+      estado_pago = "Pagado";
+    } else if (proximoLimite) {
+      dias_para_limite = Math.ceil((proximoLimite.getTime() - hoy.getTime()) / dayMs);
+      if (dias_para_limite < 0) estado_pago = "Vencido";
+      else if (dias_para_limite <= 5) estado_pago = "Por vencer";
+      else estado_pago = "Al día";
+    } else {
+      estado_pago = "Pendiente";
+    }
+
+    res.json({
+      ...p,
+      total_pagado: totalPagado,
+      pendiente,
+      estado_pago,
+      dias_para_limite,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error obteniendo resumen" });
+  }
+});
