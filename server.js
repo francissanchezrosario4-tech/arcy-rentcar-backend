@@ -185,13 +185,13 @@ app.get("/vehiculos", async (req, res) => {
 });
 
 app.post("/vehiculos", async (req, res) => {
-  const { marca, modelo, ano, placa, estado, precio_dia, imagen, seguro_vencimiento } = req.body;
+  const { marca, modelo, ano, placa, estado, precio_dia, imagen } = req.body;
 
   try {
     const r = await pool.query(
       `
-      INSERT INTO vehiculos (marca, modelo, ano, placa, estado, precio_dia, imagen, seguro_vencimiento)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      INSERT INTO vehiculos (marca, modelo, ano, placa, estado, precio_dia, imagen)
+      VALUES ($1,$2,$3,$4,$5,$6,$7)
       RETURNING *
       `,
       [
@@ -202,7 +202,6 @@ app.post("/vehiculos", async (req, res) => {
         estado ?? "Disponible",
         Number(precio_dia ?? 0),
         imagen || "",
-        seguro_vencimiento || null,
       ]
     );
     res.json(r.rows[0]);
@@ -213,14 +212,14 @@ app.post("/vehiculos", async (req, res) => {
 
 app.put("/vehiculos/:id", async (req, res) => {
   const { id } = req.params;
-  const { marca, modelo, ano, placa, estado, precio_dia, imagen, seguro_vencimiento } = req.body;
+  const { marca, modelo, ano, placa, estado, precio_dia, imagen } = req.body;
 
   try {
     const r = await pool.query(
       `
       UPDATE vehiculos
-      SET marca=$1, modelo=$2, ano=$3, placa=$4, estado=$5, precio_dia=$6, imagen=$7, seguro_vencimiento=$8
-      WHERE id=$9
+      SET marca=$1, modelo=$2, ano=$3, placa=$4, estado=$5, precio_dia=$6, imagen=$7
+      WHERE id=$8
       RETURNING *
       `,
       [
@@ -231,7 +230,6 @@ app.put("/vehiculos/:id", async (req, res) => {
         estado ?? "Disponible",
         Number(precio_dia ?? 0),
         imagen || "",
-        seguro_vencimiento || null,
         id,
       ]
     );
@@ -424,221 +422,122 @@ app.delete("/facturas/:id", requireAdmin, async (req, res) => {
 
 
 /* =======================
-   SEGUROS ALERTAS
+   SEGURO POLIZAS
 ======================= */
-app.get("/seguros-alertas", async (req, res) => {
-  try {
-    const r = await pool.query(`
-      SELECT id, marca, modelo, placa, seguro_vencimiento
-      FROM vehiculos
-      WHERE seguro_vencimiento IS NOT NULL
-        AND seguro_vencimiento <= CURRENT_DATE + INTERVAL '30 days'
-      ORDER BY seguro_vencimiento ASC
-    `);
 
-    res.json(r.rows);
+app.post("/seguro/polizas", async (req, res) => {
+  const { vehiculo_id, total_poliza, fecha_inicio, fecha_fin } = req.body;
+  try {
+    const result = await pool.query(
+      `INSERT INTO seguro_polizas (vehiculo_id, total_poliza, fecha_inicio, fecha_fin)
+       VALUES ($1,$2,$3,$4)
+       RETURNING *`,
+      [vehiculo_id, total_poliza, fecha_inicio, fecha_fin]
+    );
+
+    // 🔥 SINCRONIZAR con vehiculos.seguro_vencimiento
+    await pool.query(
+      `UPDATE vehiculos
+       SET seguro_vencimiento = $1
+       WHERE id = $2`,
+      [fecha_fin, vehiculo_id]
+    );
+
+    res.json(result.rows[0]);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-
-
-/* =======================
-   SEGURO - POLIZAS & PAGOS (Recordatorios RD)
-   - Opción B: múltiples pólizas por vehículo
-   - Opción 1: pagos parciales con fecha límite (próximo pago)
-======================= */
-
-// Crear póliza (un seguro completo: total + inicio/fin)
-app.post("/seguro/polizas", async (req, res) => {
-  const { vehiculo_id, total_poliza, fecha_inicio, fecha_fin } = req.body;
-
-  if (!vehiculo_id || !total_poliza || !fecha_inicio || !fecha_fin) {
-    return res.status(400).json({ error: "vehiculo_id, total_poliza, fecha_inicio y fecha_fin son requeridos" });
-  }
-
-  try {
-    const r = await pool.query(
-      `
-      INSERT INTO seguro_polizas (vehiculo_id, total_poliza, fecha_inicio, fecha_fin)
-      VALUES ($1,$2,$3,$4)
-      RETURNING *
-      `,
-      [vehiculo_id, total_poliza, fecha_inicio, fecha_fin]
-    );
-
-    res.json(r.rows[0]);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Error creando póliza" });
-  }
-});
-
-// Registrar un pago parcial (monto pagado + fecha pago + fecha límite del próximo pago)
-app.post("/seguro/pagos", async (req, res) => {
-  const { poliza_id, monto, fecha_pago, fecha_limite } = req.body;
-
-  if (!poliza_id || monto === undefined || monto === null || !fecha_pago || !fecha_limite) {
-    return res.status(400).json({ error: "poliza_id, monto, fecha_pago y fecha_limite son requeridos" });
-  }
-
-  try {
-    const r = await pool.query(
-      `
-      INSERT INTO seguro_pagos (poliza_id, monto, fecha_pago, fecha_limite)
-      VALUES ($1,$2,$3,$4)
-      RETURNING *
-      `,
-      [poliza_id, monto, fecha_pago, fecha_limite]
-    );
-
-    res.json(r.rows[0]);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Error registrando pago" });
-  }
-});
-
-// Listar pagos de una póliza (historial)
-app.get("/seguro/pagos/:poliza_id", async (req, res) => {
-  const { poliza_id } = req.params;
-
-  try {
-    const r = await pool.query(
-      `
-      SELECT *
-      FROM seguro_pagos
-      WHERE poliza_id = $1
-      ORDER BY fecha_pago ASC, id ASC
-      `,
-      [poliza_id]
-    );
-
-    res.json(r.rows);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Error obteniendo pagos" });
-  }
-});
-
-// Listar pólizas de un vehículo con cálculo automático (total pagado / pendiente / próximo límite)
 app.get("/seguro/polizas/:vehiculo_id", async (req, res) => {
   const { vehiculo_id } = req.params;
-
   try {
-    const r = await pool.query(
-      `
-      SELECT 
-        p.*,
-        COALESCE(SUM(pg.monto),0) AS total_pagado,
-        MAX(pg.fecha_limite) AS proximo_limite
-      FROM seguro_polizas p
-      LEFT JOIN seguro_pagos pg ON pg.poliza_id = p.id
-      WHERE p.vehiculo_id = $1
-      GROUP BY p.id
-      ORDER BY p.fecha_inicio DESC
-      `,
+    const result = await pool.query(
+      `SELECT * FROM seguro_polizas
+       WHERE vehiculo_id = $1
+       ORDER BY created_at DESC`,
       [vehiculo_id]
     );
-
-    const hoy = new Date();
-    const dayMs = 1000 * 60 * 60 * 24;
-
-    const resultado = r.rows.map((p) => {
-      const totalPoliza = Number(p.total_poliza || 0);
-      const totalPagado = Number(p.total_pagado || 0);
-      const pendiente = totalPoliza - totalPagado;
-
-      let estado_pago = "Al día";
-      let dias_para_limite = null;
-
-      const proximoLimite = p.proximo_limite ? new Date(p.proximo_limite) : null;
-
-      if (pendiente <= 0) {
-        estado_pago = "Pagado";
-      } else if (proximoLimite) {
-        dias_para_limite = Math.ceil((proximoLimite.getTime() - hoy.getTime()) / dayMs);
-        if (dias_para_limite < 0) estado_pago = "Vencido";
-        else if (dias_para_limite <= 5) estado_pago = "Por vencer";
-        else estado_pago = "Al día";
-      } else {
-        // Si todavía no has registrado ningún pago, igual dejamos pendiente visible
-        estado_pago = "Pendiente";
-      }
-
-      return {
-        ...p,
-        total_pagado: totalPagado,
-        pendiente,
-        estado_pago,
-        dias_para_limite,
-      };
-    });
-
-    res.json(resultado);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Error obteniendo pólizas" });
+    res.json(result.rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
-// Resumen (póliza más reciente) para mostrar recordatorio rápido en dashboard
-app.get("/seguro/resumen/:vehiculo_id", async (req, res) => {
-  const { vehiculo_id } = req.params;
+/* =======================
+   SEGURO PAGOS
+======================= */
 
+app.post("/seguro/pagos", async (req, res) => {
+  const { poliza_id, monto, fecha_pago, fecha_limite } = req.body;
   try {
-    const r = await pool.query(
-      `
-      SELECT 
-        p.*,
-        COALESCE(SUM(pg.monto),0) AS total_pagado,
-        MAX(pg.fecha_limite) AS proximo_limite
-      FROM seguro_polizas p
-      LEFT JOIN seguro_pagos pg ON pg.poliza_id = p.id
-      WHERE p.vehiculo_id = $1
-      GROUP BY p.id
-      ORDER BY p.fecha_inicio DESC
-      LIMIT 1
-      `,
+    const result = await pool.query(
+      `INSERT INTO seguro_pagos (poliza_id, monto, fecha_pago, fecha_limite)
+       VALUES ($1,$2,$3,$4)
+       RETURNING *`,
+      [poliza_id, monto, fecha_pago, fecha_limite]
+    );
+    res.json(result.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/seguro/pagos/:poliza_id", async (req, res) => {
+  const { poliza_id } = req.params;
+  try {
+    const result = await pool.query(
+      `SELECT * FROM seguro_pagos
+       WHERE poliza_id = $1
+       ORDER BY created_at DESC`,
+      [poliza_id]
+    );
+    res.json(result.rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/seguro/polizas/:vehiculo_id/resumen", async (req, res) => {
+  const { vehiculo_id } = req.params;
+  try {
+    const poliza = await pool.query(
+      `SELECT * FROM seguro_polizas
+       WHERE vehiculo_id = $1
+       ORDER BY created_at DESC
+       LIMIT 1`,
       [vehiculo_id]
     );
 
-    if (r.rows.length === 0) return res.json(null);
-
-    const p = r.rows[0];
-    const hoy = new Date();
-    const dayMs = 1000 * 60 * 60 * 24;
-
-    const totalPoliza = Number(p.total_poliza || 0);
-    const totalPagado = Number(p.total_pagado || 0);
-    const pendiente = totalPoliza - totalPagado;
-
-    let estado_pago = "Al día";
-    let dias_para_limite = null;
-
-    const proximoLimite = p.proximo_limite ? new Date(p.proximo_limite) : null;
-
-    if (pendiente <= 0) {
-      estado_pago = "Pagado";
-    } else if (proximoLimite) {
-      dias_para_limite = Math.ceil((proximoLimite.getTime() - hoy.getTime()) / dayMs);
-      if (dias_para_limite < 0) estado_pago = "Vencido";
-      else if (dias_para_limite <= 5) estado_pago = "Por vencer";
-      else estado_pago = "Al día";
-    } else {
-      estado_pago = "Pendiente";
+    if (!poliza.rows.length) {
+      return res.json({ saldo: 0 });
     }
 
+    const pagos = await pool.query(
+      `SELECT COALESCE(SUM(monto),0) as total_pagado
+       FROM seguro_pagos
+       WHERE poliza_id = $1`,
+      [poliza.rows[0].id]
+    );
+
+    const total_poliza = Number(poliza.rows[0].total_poliza);
+    const total_pagado = Number(pagos.rows[0].total_pagado);
+    const saldo = total_poliza - total_pagado;
+
     res.json({
-      ...p,
-      total_pagado: totalPagado,
-      pendiente,
-      estado_pago,
-      dias_para_limite,
+      poliza: poliza.rows[0],
+      total_pagado,
+      saldo
     });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Error obteniendo resumen" });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
+
+/* =======================
+   START SERVER
+======================= */
+app.listen(PORT, () => {
+  console.log(`Servidor corriendo en puerto ${PORT}`);
+});
+
