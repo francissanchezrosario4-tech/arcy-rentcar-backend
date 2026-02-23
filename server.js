@@ -449,7 +449,7 @@ app.get("/seguros-alertas", async (req, res) => {
 app.get("/seguros-pagos", async (req, res) => {
   try {
     const r = await pool.query(`
-      SELECT sp.*, v.marca, v.modelo, v.placa
+      SELECT sp.*, v.marca, v.modelo, v.anio, v.placa
       FROM seguros_pagos sp
       LEFT JOIN vehiculos v ON v.id = sp.vehiculo_id
       ORDER BY sp.fecha_limite ASC
@@ -581,7 +581,7 @@ app.get("/seguros-pagos/:id/abonos", async (req, res) => {
 app.get("/seguros-pagos-alertas", async (req, res) => {
   try {
     const r = await pool.query(`
-      SELECT sp.*, v.marca, v.modelo, v.placa
+      SELECT sp.*, v.marca, v.modelo, v.anio, v.placa
       FROM seguros_pagos sp
       LEFT JOIN vehiculos v ON v.id = sp.vehiculo_id
       WHERE sp.estado != 'completado'
