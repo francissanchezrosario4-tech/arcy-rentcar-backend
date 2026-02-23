@@ -185,13 +185,13 @@ app.get("/vehiculos", async (req, res) => {
 });
 
 app.post("/vehiculos", async (req, res) => {
-  const { marca, modelo, ano, placa, estado, precio_dia, imagen } = req.body;
+  const { marca, modelo, ano, placa, estado, precio_dia, imagen, seguro_vencimiento } = req.body;
 
   try {
     const r = await pool.query(
       `
-      INSERT INTO vehiculos (marca, modelo, ano, placa, estado, precio_dia, imagen)
-      VALUES ($1,$2,$3,$4,$5,$6,$7)
+      INSERT INTO vehiculos (marca, modelo, ano, placa, estado, precio_dia, imagen, seguro_vencimiento)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
       RETURNING *
       `,
       [
@@ -202,6 +202,7 @@ app.post("/vehiculos", async (req, res) => {
         estado ?? "Disponible",
         Number(precio_dia ?? 0),
         imagen || "",
+        seguro_vencimiento || null,
       ]
     );
     res.json(r.rows[0]);
@@ -212,14 +213,14 @@ app.post("/vehiculos", async (req, res) => {
 
 app.put("/vehiculos/:id", async (req, res) => {
   const { id } = req.params;
-  const { marca, modelo, ano, placa, estado, precio_dia, imagen } = req.body;
+  const { marca, modelo, ano, placa, estado, precio_dia, imagen, seguro_vencimiento } = req.body;
 
   try {
     const r = await pool.query(
       `
       UPDATE vehiculos
-      SET marca=$1, modelo=$2, ano=$3, placa=$4, estado=$5, precio_dia=$6, imagen=$7
-      WHERE id=$8
+      SET marca=$1, modelo=$2, ano=$3, placa=$4, estado=$5, precio_dia=$6, imagen=$7, seguro_vencimiento=$8
+      WHERE id=$9
       RETURNING *
       `,
       [
@@ -230,6 +231,7 @@ app.put("/vehiculos/:id", async (req, res) => {
         estado ?? "Disponible",
         Number(precio_dia ?? 0),
         imagen || "",
+        seguro_vencimiento || null,
         id,
       ]
     );
@@ -422,113 +424,19 @@ app.delete("/facturas/:id", requireAdmin, async (req, res) => {
 
 
 /* =======================
-   SEGURO POLIZAS
+   SEGUROS ALERTAS
 ======================= */
-
-app.post("/seguro/polizas", async (req, res) => {
-  const { vehiculo_id, total_poliza, fecha_inicio, fecha_fin } = req.body;
+app.get("/seguros-alertas", async (req, res) => {
   try {
-    const result = await pool.query(
-      `INSERT INTO seguro_polizas (vehiculo_id, total_poliza, fecha_inicio, fecha_fin)
-       VALUES ($1,$2,$3,$4)
-       RETURNING *`,
-      [vehiculo_id, total_poliza, fecha_inicio, fecha_fin]
-    );
+    const r = await pool.query(`
+      SELECT id, marca, modelo, placa, seguro_vencimiento
+      FROM vehiculos
+      WHERE seguro_vencimiento IS NOT NULL
+        AND seguro_vencimiento <= CURRENT_DATE + INTERVAL '30 days'
+      ORDER BY seguro_vencimiento ASC
+    `);
 
-    // 🔥 SINCRONIZAR con vehiculos.seguro_vencimiento
-    await pool.query(
-      `UPDATE vehiculos
-       SET seguro_vencimiento = $1
-       WHERE id = $2`,
-      [fecha_fin, vehiculo_id]
-    );
-
-    res.json(result.rows[0]);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.get("/seguro/polizas/:vehiculo_id", async (req, res) => {
-  const { vehiculo_id } = req.params;
-  try {
-    const result = await pool.query(
-      `SELECT * FROM seguro_polizas
-       WHERE vehiculo_id = $1
-       ORDER BY created_at DESC`,
-      [vehiculo_id]
-    );
-    res.json(result.rows);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-/* =======================
-   SEGURO PAGOS
-======================= */
-
-app.post("/seguro/pagos", async (req, res) => {
-  const { poliza_id, monto, fecha_pago, fecha_limite } = req.body;
-  try {
-    const result = await pool.query(
-      `INSERT INTO seguro_pagos (poliza_id, monto, fecha_pago, fecha_limite)
-       VALUES ($1,$2,$3,$4)
-       RETURNING *`,
-      [poliza_id, monto, fecha_pago, fecha_limite]
-    );
-    res.json(result.rows[0]);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.get("/seguro/pagos/:poliza_id", async (req, res) => {
-  const { poliza_id } = req.params;
-  try {
-    const result = await pool.query(
-      `SELECT * FROM seguro_pagos
-       WHERE poliza_id = $1
-       ORDER BY created_at DESC`,
-      [poliza_id]
-    );
-    res.json(result.rows);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.get("/seguro/polizas/:vehiculo_id/resumen", async (req, res) => {
-  const { vehiculo_id } = req.params;
-  try {
-    const poliza = await pool.query(
-      `SELECT * FROM seguro_polizas
-       WHERE vehiculo_id = $1
-       ORDER BY created_at DESC
-       LIMIT 1`,
-      [vehiculo_id]
-    );
-
-    if (!poliza.rows.length) {
-      return res.json({ saldo: 0 });
-    }
-
-    const pagos = await pool.query(
-      `SELECT COALESCE(SUM(monto),0) as total_pagado
-       FROM seguro_pagos
-       WHERE poliza_id = $1`,
-      [poliza.rows[0].id]
-    );
-
-    const total_poliza = Number(poliza.rows[0].total_poliza);
-    const total_pagado = Number(pagos.rows[0].total_pagado);
-    const saldo = total_poliza - total_pagado;
-
-    res.json({
-      poliza: poliza.rows[0],
-      total_pagado,
-      saldo
-    });
+    res.json(r.rows);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -540,4 +448,3 @@ app.get("/seguro/polizas/:vehiculo_id/resumen", async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Servidor corriendo en puerto ${PORT}`);
 });
-
