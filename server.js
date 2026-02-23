@@ -441,7 +441,159 @@ app.get("/seguros-alertas", async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+/* =====================================================
+   SEGUROS PAGOS PARCIALES (NUEVO MÓDULO)
+===================================================== */
 
+/* Obtener todos los pagos de seguro */
+app.get("/seguros-pagos", async (req, res) => {
+  try {
+    const r = await pool.query(`
+      SELECT sp.*, v.marca, v.modelo, v.placa
+      FROM seguros_pagos sp
+      LEFT JOIN vehiculos v ON v.id = sp.vehiculo_id
+      ORDER BY sp.fecha_limite ASC
+    `);
+
+    const hoy = new Date().toISOString().slice(0,10);
+
+    const data = r.rows.map(row => {
+      let estado = row.estado;
+
+      if (estado !== "completado" && row.fecha_limite < hoy) {
+        estado = "vencido";
+      }
+
+      return { ...row, estado };
+    });
+
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+/* Crear nuevo seguro con pago inicial */
+app.post("/seguros-pagos", async (req, res) => {
+  const { vehiculo_id, total_monto, monto_pagado, fecha_limite } = req.body;
+
+  const restante = Number(total_monto) - Number(monto_pagado);
+  const estado = restante <= 0 ? "completado" : "pendiente";
+
+  try {
+    const r = await pool.query(
+      `
+      INSERT INTO seguros_pagos
+      (vehiculo_id, total_monto, monto_pagado, monto_restante, fecha_limite, estado)
+      VALUES ($1,$2,$3,$4,$5,$6)
+      RETURNING *
+      `,
+      [vehiculo_id, total_monto, monto_pagado, restante, fecha_limite, estado]
+    );
+
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+/* Registrar abono adicional */
+app.post("/seguros-pagos/:id/abono", async (req, res) => {
+  const { id } = req.params;
+  const { monto } = req.body;
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const seguroRes = await client.query(
+      "SELECT * FROM seguros_pagos WHERE id=$1",
+      [id]
+    );
+
+    if (seguroRes.rows.length === 0)
+      throw new Error("Seguro no encontrado");
+
+    const seguro = seguroRes.rows[0];
+
+    const nuevoPagado = Number(seguro.monto_pagado) + Number(monto);
+    const nuevoRestante = Number(seguro.total_monto) - nuevoPagado;
+
+    let nuevoEstado = "pendiente";
+    if (nuevoRestante <= 0) nuevoEstado = "completado";
+
+    await client.query(
+      `
+      UPDATE seguros_pagos
+      SET monto_pagado=$1,
+          monto_restante=$2,
+          estado=$3
+      WHERE id=$4
+      `,
+      [nuevoPagado, nuevoRestante, nuevoEstado, id]
+    );
+
+    await client.query(
+      `
+      INSERT INTO seguros_abonos (seguro_id, monto)
+      VALUES ($1,$2)
+      `,
+      [id, monto]
+    );
+
+    await client.query("COMMIT");
+
+    res.json({ status: "Abono registrado correctamente ✅" });
+  } catch (e) {
+    await client.query("ROLLBACK");
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+
+/* Obtener historial de abonos */
+app.get("/seguros-pagos/:id/abonos", async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const r = await pool.query(
+      `
+      SELECT * FROM seguros_abonos
+      WHERE seguro_id=$1
+      ORDER BY fecha_pago DESC
+      `,
+      [id]
+    );
+
+    res.json(r.rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+/* Alertas de pagos vencidos */
+app.get("/seguros-pagos-alertas", async (req, res) => {
+  try {
+    const r = await pool.query(`
+      SELECT sp.*, v.marca, v.modelo, v.placa
+      FROM seguros_pagos sp
+      LEFT JOIN vehiculos v ON v.id = sp.vehiculo_id
+      WHERE sp.estado != 'completado'
+        AND sp.fecha_limite < CURRENT_DATE
+      ORDER BY sp.fecha_limite ASC
+    `);
+
+    res.json(r.rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 /* =======================
    START SERVER
 ======================= */
