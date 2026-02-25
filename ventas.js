@@ -90,6 +90,46 @@ router.delete("/ventas/:id", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+// ============================
+// OBTENER DETALLE COMPLETO
+// ============================
+router.get("/ventas/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const vehiculo = await pool.query(
+      `SELECT * FROM vehiculos_venta WHERE id = $1`,
+      [id]
+    );
+
+    if (vehiculo.rows.length === 0) {
+      return res.status(404).json({ error: "Venta no encontrada" });
+    }
+
+    const gastos = await pool.query(
+      `SELECT * FROM gastos_vehiculo
+       WHERE vehiculo_id = $1
+       ORDER BY id ASC`,
+      [id]
+    );
+
+    const pagos = await pool.query(
+      `SELECT * FROM pagos_vehiculo
+       WHERE vehiculo_id = $1
+       ORDER BY id ASC`,
+      [id]
+    );
+
+    res.json({
+      vehiculo: vehiculo.rows[0],
+      gastos: gastos.rows,
+      pagos: pagos.rows
+    });
+
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
   // ============================
   // RESUMEN COMPLETO AUTOMATICO
   // ============================
