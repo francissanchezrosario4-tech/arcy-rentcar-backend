@@ -71,7 +71,25 @@ export default function ventasRoutes(pool) {
       res.status(500).json({ error: e.message });
     }
   });
+// ============================
+// ELIMINAR VENTA COMPLETA
+// ============================
+router.delete("/ventas/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
 
+    await pool.query(
+      `DELETE FROM vehiculos_venta WHERE id = $1`,
+      [id]
+    );
+
+    res.json({ message: "Venta eliminada correctamente" });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error.message });
+  }
+});
   // ============================
   // RESUMEN COMPLETO AUTOMATICO
   // ============================
