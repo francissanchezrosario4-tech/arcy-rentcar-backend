@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import pkg from "pg";
 import dotenv from "dotenv";
+import ventasRoutes from "./ventas.js";
 
 dotenv.config();
 
@@ -26,6 +27,7 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false },
 });
 
+app.use("/api", ventasRoutes(pool));
 /* ===== ADMIN GUARD (opcional) =====
    Si configuras ADMIN_KEY en Render, los DELETE quedan protegidos.
 */
