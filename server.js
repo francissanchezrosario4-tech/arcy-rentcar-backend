@@ -56,7 +56,34 @@ app.get("/test-db", async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+app.get("/api/ventas/:id", async (req, res) => {
+  const { id } = req.params;
 
+  try {
+    const vehiculo = await pool.query(
+      "SELECT * FROM ventas WHERE id = $1",
+      [id]
+    );
+
+    const gastos = await pool.query(
+      "SELECT * FROM gastos WHERE venta_id = $1 ORDER BY id ASC",
+      [id]
+    );
+
+    if (vehiculo.rows.length === 0) {
+      return res.status(404).json({ error: "Venta no encontrada" });
+    }
+
+    res.json({
+      vehiculo: vehiculo.rows[0],
+      gastos: gastos.rows
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error servidor" });
+  }
+});
 /* =======================
    CLIENTES
 ======================= */
