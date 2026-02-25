@@ -130,6 +130,24 @@ router.get("/ventas/:id", async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+router.delete("/ventas-gastos/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query("DELETE FROM gastos_vehiculo WHERE id=$1", [id]);
+    res.json({ message: "Gasto eliminado ✅" });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+router.delete("/ventas-pagos/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query("DELETE FROM pagos_vehiculo WHERE id=$1", [id]);
+    res.json({ message: "Pago eliminado ✅" });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
   // ============================
   // RESUMEN COMPLETO AUTOMATICO
   // ============================
