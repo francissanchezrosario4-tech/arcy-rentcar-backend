@@ -9,14 +9,14 @@ export default function ventasRoutes(pool) {
   // ============================
   router.post("/ventas", async (req, res) => {
     try {
-      const { marca, modelo, ano, color, chasis, precio_venta, fecha_venta } = req.body;
+     const { marca, modelo, ano, color, chasis, precio_venta, fecha_venta, imagen } = req.body;
 
       const r = await pool.query(
         `INSERT INTO vehiculos_venta
-        (marca, modelo, ano, color, chasis, precio_venta, fecha_venta)
-        VALUES ($1,$2,$3,$4,$5,$6,$7)
+        (marca, modelo, ano, color, chasis, precio_venta, fecha_venta, imagen)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
         RETURNING *`,
-        [marca, modelo, ano, color, chasis, precio_venta, fecha_venta]
+        [marca, modelo, ano, color, chasis, precio_venta, fecha_venta, imagen]
       );
 
       res.json(r.rows[0]);
