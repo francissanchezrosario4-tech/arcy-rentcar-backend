@@ -10,7 +10,8 @@ export default function ventasRoutes(pool) {
   router.post("/ventas", async (req, res) => {
     try {
      const { marca, modelo, ano, color, chasis, precio_venta, fecha_venta, imagen } = req.body;
-
+const precioNumero = Number(precio_venta);
+const precioFinal = Number.isFinite(precioNumero) ? precioNumero : 0;
       const r = await pool.query(
         `INSERT INTO vehiculos_venta
         (marca, modelo, ano, color, chasis, precio_venta, fecha_venta, imagen)
@@ -33,13 +34,15 @@ export default function ventasRoutes(pool) {
     try {
       const { descripcion, fecha, monto } = req.body;
       const { id } = req.params;
+      const montoNumero = Number(monto);
+      const montoFinal = Number.isFinite(montoNumero) ? montoNumero : 0;
 
       const r = await pool.query(
         `INSERT INTO gastos_vehiculo
         (vehiculo_id, descripcion, fecha, monto)
         VALUES ($1,$2,$3,$4)
         RETURNING *`,
-        [id, descripcion, fecha, monto]
+        [id, descripcion, fecha, montoFinal]
       );
 
       res.json(r.rows[0]);
@@ -57,12 +60,14 @@ export default function ventasRoutes(pool) {
       const { descripcion, fecha, monto } = req.body;
       const { id } = req.params;
 
+      const montoNumero = Number(monto);
+      const montoFinal = Number.isFinite(montoNumero) ? montoNumero : 0;
       const r = await pool.query(
         `INSERT INTO pagos_vehiculo
         (vehiculo_id, descripcion, fecha, monto)
         VALUES ($1,$2,$3,$4)
         RETURNING *`,
-        [id, descripcion, fecha, monto]
+        [id, descripcion, fecha, montoFinal]
       );
 
       res.json(r.rows[0]);
