@@ -8,24 +8,58 @@ export default function ventasRoutes(pool) {
   // CREAR VEHICULO VENDIDO
   // ============================
   router.post("/ventas", async (req, res) => {
-    try {
-     const { marca, modelo, ano, color, chasis, precio_venta, fecha_venta, imagen } = req.body;
-const precioNumero = Number(precio_venta);
-const precioFinal = Number.isFinite(precioNumero) ? precioNumero : 0;
-      const r = await pool.query(
-        `INSERT INTO vehiculos_venta
-        (marca, modelo, ano, color, chasis, precio_venta, fecha_venta, imagen)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-        RETURNING *`,
-        [marca, modelo, ano, color, chasis, precio_venta, fecha_venta, imagen]
-      );
+  try {
+    const {
+      marca,
+      modelo,
+      ano,
+      color,
+      chasis,
+      precio_venta,
+      fecha_venta,
+      imagen,
+      numero_venta
+    } = req.body;
 
-      res.json(r.rows[0]);
+    const precioNumero = Number(precio_venta);
+    const precioFinal = Number.isFinite(precioNumero) ? precioNumero : 0;
 
-    } catch (e) {
-      res.status(500).json({ error: e.message });
+    let numeroFinal;
+
+    if (numero_venta) {
+      numeroFinal = Number(numero_venta);
+    } else {
+      const numero = await pool.query(`
+        SELECT COALESCE(MAX(numero_venta),0) + 1 AS siguiente
+        FROM vehiculos_venta
+      `);
+      numeroFinal = numero.rows[0].siguiente;
     }
-  });
+
+    const r = await pool.query(
+      `INSERT INTO vehiculos_venta
+      (marca, modelo, ano, color, chasis, precio_venta, fecha_venta, imagen, numero_venta)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      RETURNING *`,
+      [
+        marca,
+        modelo,
+        ano,
+        color,
+        chasis,
+        precioFinal,
+        fecha_venta,
+        imagen,
+        numeroFinal
+      ]
+    );
+
+    res.json(r.rows[0]);
+
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
   // ============================
   // AGREGAR GASTO
