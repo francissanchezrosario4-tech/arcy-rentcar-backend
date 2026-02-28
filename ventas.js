@@ -276,6 +276,43 @@ ORDER BY v.id DESC;
       res.status(500).json({ error: e.message });
     }
   });
+  router.get("/ventas-reporte-completo", async (req, res) => {
+  try {
+
+    const data = await pool.query(`
+      SELECT
+        v.numero_venta,
+        v.marca,
+        v.modelo,
+        v.ano,
+        v.precio_venta,
+        COALESCE(g.total_gastos,0) AS total_gastos,
+        COALESCE(p.total_pagos,0) AS total_pagos,
+        (
+          v.precio_venta
+          - COALESCE(g.total_gastos,0)
+          - COALESCE(p.total_pagos,0)
+        ) AS ganancia_limpia
+      FROM vehiculos_venta v
+      LEFT JOIN (
+        SELECT vehiculo_id, SUM(monto) AS total_gastos
+        FROM gastos_vehiculo
+        GROUP BY vehiculo_id
+      ) g ON g.vehiculo_id = v.id
+      LEFT JOIN (
+        SELECT vehiculo_id, SUM(monto) AS total_pagos
+        FROM pagos_vehiculo
+        GROUP BY vehiculo_id
+      ) p ON p.vehiculo_id = v.id
+      ORDER BY v.numero_venta ASC
+    `);
+
+    res.json(data.rows);
+
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
   return router;
 }
