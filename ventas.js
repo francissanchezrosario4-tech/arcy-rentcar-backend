@@ -215,6 +215,7 @@ router.delete("/ventas-pagos/:id", async (req, res) => {
       const vehiculos = await pool.query(`
         SELECT
   v.id,
+  v.numero_venta,
   v.marca,
   v.modelo,
   v.ano,
