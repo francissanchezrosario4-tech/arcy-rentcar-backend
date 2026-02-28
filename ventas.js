@@ -60,7 +60,26 @@ export default function ventasRoutes(pool) {
     res.status(500).json({ error: e.message });
   }
 });
+router.put("/ventas/:id/numero", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { numero_venta } = req.body;
 
+    if (!numero_venta) {
+      return res.status(400).json({ error: "Número requerido" });
+    }
+
+    await pool.query(
+      "UPDATE vehiculos_venta SET numero_venta = $1 WHERE id = $2",
+      [Number(numero_venta), id]
+    );
+
+    res.json({ ok: true });
+
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
   // ============================
   // AGREGAR GASTO
   // ============================
