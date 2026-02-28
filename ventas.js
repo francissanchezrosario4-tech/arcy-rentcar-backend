@@ -161,27 +161,38 @@ router.delete("/ventas-pagos/:id", async (req, res) => {
 
       const vehiculos = await pool.query(`
         SELECT
-          v.id,
-          v.marca,
-          v.modelo,
-          v.ano,
-          v.precio_venta,
+  v.id,
+  v.marca,
+  v.modelo,
+  v.ano,
+  v.precio_venta,
 
-          COALESCE(SUM(g.monto),0) AS total_gastos,
-          COALESCE(SUM(p.monto),0) AS total_pagos,
+  COALESCE(g.total_gastos,0) AS total_gastos,
+  COALESCE(p.total_pagos,0) AS total_pagos,
 
-          (v.precio_venta - COALESCE(SUM(g.monto),0)) AS restante,
+  (v.precio_venta - COALESCE(g.total_gastos,0)) AS restante,
 
-          (v.precio_venta
-            - COALESCE(SUM(g.monto),0)
-            - COALESCE(SUM(p.monto),0)
-          ) AS ganancia_limpia
+  (
+    v.precio_venta
+    - COALESCE(g.total_gastos,0)
+    - COALESCE(p.total_pagos,0)
+  ) AS ganancia_limpia
 
-        FROM vehiculos_venta v
-        LEFT JOIN gastos_vehiculo g ON g.vehiculo_id = v.id
-        LEFT JOIN pagos_vehiculo p ON p.vehiculo_id = v.id
-        GROUP BY v.id
-        ORDER BY v.id DESC
+FROM vehiculos_venta v
+
+LEFT JOIN (
+  SELECT vehiculo_id, SUM(monto) AS total_gastos
+  FROM gastos_vehiculo
+  GROUP BY vehiculo_id
+) g ON g.vehiculo_id = v.id
+
+LEFT JOIN (
+  SELECT vehiculo_id, SUM(monto) AS total_pagos
+  FROM pagos_vehiculo
+  GROUP BY vehiculo_id
+) p ON p.vehiculo_id = v.id
+
+ORDER BY v.id DESC;
       `);
 
       const totalVendido = await pool.query(`
