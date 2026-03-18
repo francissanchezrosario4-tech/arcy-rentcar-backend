@@ -137,7 +137,8 @@ app.get("/vehiculos", async (req, res) => {
         FROM rentas r
         LEFT JOIN facturas f ON f.id = r.factura_id
         WHERE r.estado = 'activa'
-          AND CURRENT_DATE BETWEEN r.fecha_inicio AND r.fecha_fin
+        AND CURRENT_DATE >= r.fecha_inicio
+        AND CURRENT_DATE < r.fecha_fin
       ),
       renta_pendiente AS (
         SELECT
@@ -150,7 +151,7 @@ app.get("/vehiculos", async (req, res) => {
         FROM rentas r
         LEFT JOIN facturas f ON f.id = r.factura_id
         WHERE r.estado = 'activa'
-          AND r.fecha_inicio > CURRENT_DATE
+          AND r.fecha_inicio >= CURRENT_DATE
       )
       SELECT
         v.*,
@@ -289,7 +290,6 @@ app.get("/rentas", async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
-
 app.get("/disponibilidad/:vehiculo_id", async (req, res) => {
   const { vehiculo_id } = req.params;
   const { inicio, fin } = req.query;
@@ -301,8 +301,8 @@ app.get("/disponibilidad/:vehiculo_id", async (req, res) => {
       FROM rentas
       WHERE vehiculo_id = $1
         AND estado = 'activa'
-        AND fecha_inicio <= $3
-        AND fecha_fin >= $2
+        AND fecha_inicio < $3
+        AND fecha_fin > $2
       LIMIT 1
       `,
       [vehiculo_id, inicio, fin]
