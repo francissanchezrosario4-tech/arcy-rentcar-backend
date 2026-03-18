@@ -507,49 +507,6 @@ app.post("/seguros-pagos/:id/abono", async (req, res) => {
   const { monto } = req.body;
 
   const client = await pool.connect();
-/* Eliminar pago de seguro */
-app.delete("/seguros-pagos/:id", async (req, res) => {
-  const { id } = req.params;
-  const client = await pool.connect();
-
-  try {
-    await client.query("BEGIN");
-
-    const info = await client.query(
-      `SELECT sp.*, v.marca, v.modelo, v.ano, v.placa
-       FROM seguros_pagos sp
-       JOIN vehiculos v ON v.id = sp.vehiculo_id
-       WHERE sp.id = $1`,
-      [id]
-    );
-
-    if (info.rows.length === 0) {
-      throw new Error("Registro no encontrado");
-    }
-
-    await client.query(
-      `DELETE FROM seguros_abonos WHERE seguro_id = $1`,
-      [id]
-    );
-
-    await client.query(
-      `DELETE FROM seguros_pagos WHERE id = $1`,
-      [id]
-    );
-
-    await client.query("COMMIT");
-
-    res.json({
-      status: "Eliminado correctamente",
-      vehiculo: `${info.rows[0].marca} ${info.rows[0].modelo}`
-    });
-  } catch (e) {
-    await client.query("ROLLBACK");
-    res.status(500).json({ error: e.message });
-  } finally {
-    client.release();
-  }
-});
 
   try {
     await client.query("BEGIN");
@@ -559,8 +516,9 @@ app.delete("/seguros-pagos/:id", async (req, res) => {
       [id]
     );
 
-    if (seguroRes.rows.length === 0)
+    if (seguroRes.rows.length === 0) {
       throw new Error("Seguro no encontrado");
+    }
 
     const seguro = seguroRes.rows[0];
 
@@ -592,6 +550,52 @@ app.delete("/seguros-pagos/:id", async (req, res) => {
     await client.query("COMMIT");
 
     res.json({ status: "Abono registrado correctamente ✅" });
+  } catch (e) {
+    await client.query("ROLLBACK");
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+/* Eliminar pago de seguro */
+app.delete("/seguros-pagos/:id", async (req, res) => {
+  const { id } = req.params;
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const info = await client.query(
+      `
+      SELECT sp.*, v.marca, v.modelo, v.ano, v.placa
+      FROM seguros_pagos sp
+      JOIN vehiculos v ON v.id = sp.vehiculo_id
+      WHERE sp.id = $1
+      `,
+      [id]
+    );
+
+    if (info.rows.length === 0) {
+      throw new Error("Registro no encontrado");
+    }
+
+    await client.query(
+      `DELETE FROM seguros_abonos WHERE seguro_id = $1`,
+      [id]
+    );
+
+    await client.query(
+      `DELETE FROM seguros_pagos WHERE id = $1`,
+      [id]
+    );
+
+    await client.query("COMMIT");
+
+    res.json({
+      status: "Eliminado correctamente",
+      vehiculo: `${info.rows[0].marca} ${info.rows[0].modelo}`
+    });
   } catch (e) {
     await client.query("ROLLBACK");
     res.status(500).json({ error: e.message });
