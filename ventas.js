@@ -314,52 +314,20 @@ ORDER BY v.id DESC;
   }
 });
 
-  // ============================
-  // CAMBIAR FOTO DEL VEHÍCULO
-  // ============================
-  router.put("/ventas/:id/imagen", async (req, res) => {
+  // Actualizar solamente la imagen; no modifica importes ni movimientos.
+  router.put('/ventas/:id/imagen', async (req, res) => {
     try {
-      const { id } = req.params;
-      const { imagen } = req.body;
-
-      const esURL =
-        typeof imagen === "string" &&
-        /^https?:\/\/[^\s]+$/i.test(imagen);
-
-      const esFotoSubida =
-        typeof imagen === "string" &&
-        /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(imagen);
-
-      if (
-        typeof imagen !== "string" ||
-        imagen.length > 95000 ||
-        (!esURL && !esFotoSubida)
-      ) {
-        return res.status(400).json({
-          error: "Selecciona una foto o pega una URL válida."
-        });
+      const imagen = req.body.imagen;
+      if (typeof imagen !== 'string' || imagen.length > 95000 ||
+          !(imagen === '' || /^https?:\/\/[^\s]+$/i.test(imagen) || /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(imagen))) {
+        return res.status(400).json({error:'Imagen inválida. Usa una URL http/https o sube una foto desde el formulario.'});
       }
-
-      const resultado = await pool.query(
-        `UPDATE vehiculos_venta
-         SET imagen = $1
-         WHERE id = $2
-         RETURNING *`,
-        [imagen, id]
-      );
-
-      if (resultado.rows.length === 0) {
-        return res.status(404).json({
-          error: "Venta no encontrada"
-        });
-      }
-
-      res.json(resultado.rows[0]);
-
-    } catch (error) {
-      res.status(500).json({ error: error.message });
-    }
+      const r = await pool.query('UPDATE vehiculos_venta SET imagen=$1 WHERE id=$2 RETURNING *', [imagen, req.params.id]);
+      if (!r.rows.length) return res.status(404).json({error:'Venta no encontrada'});
+      res.json(r.rows[0]);
+    } catch (e) { res.status(500).json({error:e.message}); }
   });
+
 
   return router;
 }
